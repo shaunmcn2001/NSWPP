@@ -1,7 +1,7 @@
-# LandType (Hard-coded QLD)
+# NSWPP (Hard-coded NSW)
 
-FastAPI app for exporting Queensland **Land Types** (and optional **Vegetation**) as GeoTIFF & KMZ.
-This build bakes in real QLD MapServer endpoints in `app/config.py` so it works without env vars.
+FastAPI app for exporting New South Wales **Native Vegetation** layers (and optional supporting data) as GeoTIFF & KMZ.
+This build bakes in real NSW MapServer endpoints in `app/config.py` so it works without env vars.
 
 ## Features
 
