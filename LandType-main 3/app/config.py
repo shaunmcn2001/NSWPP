@@ -1,5 +1,5 @@
 # app/config.py
-# Hard-coded service/layer/field settings for Queensland datasets
+# Hard-coded service/layer/field settings for New South Wales datasets
 
 # ── Parcels (DCDB)
 # Source: PlanningCadastre / LandParcelPropertyFramework → layer 4 "Cadastral parcels"
@@ -20,12 +20,13 @@ EASEMENT_FEATURE_NAME_FIELD = "feat_name"
 EASEMENT_TENURE_FIELD = "tenure"
 EASEMENT_AREA_FIELD = "lot_area"
 
-# ── Land Types (GLM)
-# Source: Environment / LandTypes → layer 1 "Land types"
-LANDTYPES_SERVICE_URL = "https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Environment/LandTypes/MapServer"
+# ── Native Vegetation (Draft NVR map)
+# Source: NSW Department of Climate Change, Energy, the Environment and Water →
+#         Draft Native Vegetation Regulatory Map → layer 1 "Draft native vegetation regulatory map"
+LANDTYPES_SERVICE_URL = "https://www.lmbc.nsw.gov.au/arcgis/rest/services/NVR/Draft_NVR/MapServer"
 LANDTYPES_LAYER_ID = 1
-LANDTYPES_CODE_FIELD = "lt_code_1"
-LANDTYPES_NAME_FIELD = "lt_name_1"
+LANDTYPES_CODE_FIELD = "Value"
+LANDTYPES_NAME_FIELD = "Classname"
 
 # ── Vegetation (Regulated Vegetation Management)
 # Source: Biota / VegetationManagement → layer 109 "RVM - all"

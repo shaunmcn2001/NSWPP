@@ -72,8 +72,8 @@ from .raster import make_geotiff_rgba
 
 logging.basicConfig(level=logging.INFO)
 app = FastAPI(
-    title="QLD Land Types (rewritten)",
-    description="Unified single/bulk exporter for Land Types + optional Vegetation (GeoTIFF, KMZ).",
+    title="NSW Native Vegetation (rewritten)",
+    description="Unified single/bulk exporter for NSW Native Vegetation + optional overlays (GeoTIFF, KMZ).",
     version="3.0.2",
 )
 
