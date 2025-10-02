@@ -219,12 +219,14 @@ def _clip_to_parcel_union(geom, parcel_union):
 def _normalize_easement_properties(raw: Dict[str, Any], lotplan: str) -> Dict[str, Any]:
     props = raw or {}
 
-    owner_lp = normalize_lotplan(
+    owner_lp_raw = normalize_lotplan(
         props.get("lotplan")
         or props.get(EASEMENT_LOTPLAN_FIELD)
         or props.get("lot_plan")
         or lotplan
     )
+    fallback_lp = (lotplan or "").replace("/", "")
+    owner_lp = (owner_lp_raw or fallback_lp).replace("/", "") or fallback_lp
 
     parcel_type = _clean_text(
         props.get("parcel_type")
@@ -250,7 +252,7 @@ def _normalize_easement_properties(raw: Dict[str, Any], lotplan: str) -> Dict[st
     area_m2 = _safe_float(area_value)
 
     out: Dict[str, Any] = {
-        "lotplan": owner_lp or lotplan,
+        "lotplan": owner_lp or fallback_lp,
         "parcel_type": parcel_type or None,
         "name": name or alias or None,
         "tenure": tenure or None,
@@ -264,6 +266,13 @@ def _normalize_easement_properties(raw: Dict[str, Any], lotplan: str) -> Dict[st
         out["area_ha"] = area_m2 / 10000.0
 
     return out
+
+
+def _require_parcel_features(parcel_fc: Dict[str, Any], lotplan: str) -> Dict[str, Any]:
+    features = (parcel_fc or {}).get("features") or []
+    if not features:
+        raise HTTPException(status_code=404, detail=f"Parcel '{lotplan}' not found.")
+    return parcel_fc
 
 
 def _clean_bound_value(value: Any) -> Optional[float]:
@@ -711,6 +720,7 @@ def build_property_report_kmz(
         raise HTTPException(status_code=400, detail="Lotplan is required.")
 
     parcel_fc = fetch_parcel_geojson(lotplan_norm)
+    _require_parcel_features(parcel_fc, lotplan_norm)
     parcel_union = to_shapely_union(parcel_fc)
     env = bbox_3857(parcel_union)
 
@@ -873,7 +883,8 @@ def build_property_report_kmz(
     if water_children:
         top_level_groups.append(("Water", water_children))
 
-    doc_name = f"Property Report – {lotplan_norm}"
+    safe_lotplan = lotplan_norm.replace("/", "")
+    doc_name = f"Property Report – {safe_lotplan}"
     kml_text = build_kml_nested_folders(top_level_groups, doc_name=doc_name)
 
     has_water = any(
@@ -885,7 +896,7 @@ def build_property_report_kmz(
         raise HTTPException(status_code=404, detail="No features intersect this parcel.")
 
     tmpdir = tempfile.mkdtemp(prefix="kmz_")
-    filename = f"Property Report – {lotplan_norm}.kmz"
+    filename = f"Property Report – {safe_lotplan}.kmz"
     out_path = os.path.join(tmpdir, filename)
     try:
         write_kmz(kml_text, out_path, assets=bore_assets)
@@ -1079,16 +1090,27 @@ function formatWaterPopup(props){
 
 function normText(s){ return (s || '').trim(); }
 function parseItems(text){
-  const src = (text || '')
+  const cleaned = (text || '')
     .toUpperCase()
-    .replace(/\bLOT\b/g,' ')
-    .replace(/\bPLAN\b/g,' ')
-    .replace(/\bON\b/g,' ')
-    .replace(/[^A-Z0-9]+/g,' ');
+    .replace(/\bON\b/g, ' ')
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\b([A-Z]{1,3}P)\s+(\d+)\b/g, '$1$2')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return [];
   const seen = new Set(); const out = [];
-  const rx = /(\\d+)\\s*([A-Z]+[A-Z0-9]+)/g; let m;
-  while((m = rx.exec(src)) !== null){
-    const code = `${m[1]}${m[2]}`;
+  const rx = /(?:^|\s)(?:LOT\s*)?(?<lot>[A-Z0-9]+?)(?:(?:\s*(?:SEC(?:TION)?|SEC\.)\s*(?<section_kw>[A-Z0-9]+))|(?:\s+(?<section_plain>\d+[A-Z0-9]*)))?(?:\s*(?:PLAN\s*)?)?(?<plan>[A-Z]+[A-Z0-9]+)(?=\s|$)/g;
+  let m;
+  while((m = rx.exec(cleaned)) !== null){
+    const lot = (m.groups?.lot || '').replace(/[^A-Z0-9]/g, '');
+    const plan = (m.groups?.plan || '').replace(/[^A-Z0-9]/g, '');
+    if(!lot || !plan) continue;
+    let section = (m.groups?.section_kw || m.groups?.section_plain || '').replace(/[^A-Z0-9]/g, '');
+    if(section === 'PLAN' || section === 'LOT') section = '';
+    const parts = [lot];
+    if(section) parts.push(section);
+    parts.push(plan);
+    const code = parts.join('/');
     if(!seen.has(code)){ seen.add(code); out.push(code); }
   }
   return out;
@@ -1344,6 +1366,20 @@ def health(): return {"ok": True}
 def export_geotiff(lotplan: str = Query(...), max_px: int = Query(4096, ge=256, le=8192), download: bool = Query(True)):
     lotplan = normalize_lotplan(lotplan)
     parcel_fc = fetch_parcel_geojson(lotplan)
+    if not (parcel_fc or {}).get("features"):
+        return JSONResponse(
+            {
+                "lotplan": lotplan,
+                "error": f"Parcel '{lotplan}' not found.",
+                "parcels": {"type": "FeatureCollection", "features": []},
+                "landtypes": {"type": "FeatureCollection", "features": []},
+                "bores": {"type": "FeatureCollection", "features": []},
+                "easements": {"type": "FeatureCollection", "features": []},
+                "water": {"layers": []},
+                "legend": [],
+            },
+            status_code=404,
+        )
     parcel_union = to_shapely_union(parcel_fc)
     env = bbox_3857(parcel_union)
     lt_fc = fetch_landtypes_intersecting_envelope(env)
@@ -1377,6 +1413,20 @@ def export_geotiff(lotplan: str = Query(...), max_px: int = Query(4096, ge=256, 
 def vector_geojson(lotplan: str = Query(...)):
     lotplan = normalize_lotplan(lotplan)
     parcel_fc = fetch_parcel_geojson(lotplan)
+    if not (parcel_fc or {}).get("features"):
+        return JSONResponse(
+            {
+                "lotplan": lotplan,
+                "error": f"Parcel '{lotplan}' not found.",
+                "parcels": {"type": "FeatureCollection", "features": []},
+                "landtypes": {"type": "FeatureCollection", "features": []},
+                "bores": {"type": "FeatureCollection", "features": []},
+                "easements": {"type": "FeatureCollection", "features": []},
+                "water": {"layers": []},
+                "legend": [],
+            },
+            status_code=404,
+        )
     parcel_union = to_shapely_union(parcel_fc)
     env = bbox_3857(parcel_union)
     lt_fc = fetch_landtypes_intersecting_envelope(env)
@@ -1550,6 +1600,8 @@ def vector_geojson_bulk(payload: VectorBulkRequest):
 
     for lotplan in lotplans:
         parcel_fc = fetch_parcel_geojson(lotplan)
+        if not (parcel_fc or {}).get("features"):
+            continue
         parcel_union = to_shapely_union(parcel_fc)
         env = bbox_3857(parcel_union)
 
@@ -1737,6 +1789,7 @@ def export_kml(
 ):
     lotplan = normalize_lotplan(lotplan)
     parcel_fc = fetch_parcel_geojson(lotplan)
+    _require_parcel_features(parcel_fc, lotplan)
     parcel_union = to_shapely_union(parcel_fc)
     env = bbox_3857(parcel_union)
 
