@@ -34,6 +34,7 @@ from .config import (
     PARCEL_LOT_FIELD,
     PARCEL_LOTPLAN_FIELD,
     PARCEL_PLAN_FIELD,
+    PARCEL_SECTION_FIELD,
     PARCEL_SERVICE_URL,
     WATER_LAYER_CONFIG,
     WATER_LAYER_IDS,
@@ -91,7 +92,22 @@ def _arcgis_geojson_query(service_url: str, layer_id: int, params: Dict[str, Any
         out_fc = {"type": "FeatureCollection", "features": []}
     return out_fc
 
-_LOTPLAN_RE = re.compile(r"^\s*(?:LOT\s*)?(\d+)\s*(?:PLAN\s*)?([A-Z]+[A-Z0-9]+)\s*$", re.IGNORECASE)
+_LOTPLAN_RE = re.compile(
+    r"""
+    ^\s*
+    (?:LOT\s*)?
+    (?P<lot>[A-Z0-9]+?)
+    (?:
+        \s*(?:SEC(?:TION)?|SEC\.)\s*(?P<section_kw>[A-Z0-9]+)
+      |
+        \s+(?P<section_plain>\d+[A-Z0-9]*)
+    )?
+    (?:\s*(?:PLAN\s*)?)?
+    (?P<plan>[A-Z]+[A-Z0-9]+)
+    \s*$
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 
 def _clean_text(value: Any) -> str:
@@ -102,42 +118,86 @@ def _clean_text(value: Any) -> str:
 
 def _parse_lotplan(lp: str):
     if not lp:
-        return None, None
-    m = _LOTPLAN_RE.match((lp or "").strip().upper())
-    if not m:
-        return None, None
-    return m.group(1), m.group(2)
+        return None, None, None
+    text = (lp or "").strip().upper()
+    if not text:
+        return None, None, None
+    text = re.sub(r"[^A-Z0-9]+", " ", text)
+    text = re.sub(r"\bON\b", " ", text)
+    text = re.sub(r"\b([A-Z]{1,3}P)\s+(\d+)\b", r"\1\2", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return None, None, None
+    m = _LOTPLAN_RE.match(text)
+    if m:
+        lot = (m.group("lot") or "").strip().upper()
+        section = (m.group("section_kw") or m.group("section_plain") or "").strip().upper()
+        plan = (m.group("plan") or "").strip().upper()
+        if lot and plan:
+            return lot, section or None, plan
+    m2 = re.match(
+        r"^(?:LOT\s*)?(?P<lot>\d+)\s*(?:PLAN\s*)?(?P<plan>[A-Z]+[A-Z0-9]+)\s*$",
+        text,
+        re.IGNORECASE,
+    )
+    if m2:
+        lot = (m2.group("lot") or "").strip().upper()
+        plan = (m2.group("plan") or "").strip().upper()
+        if lot and plan:
+            return lot, None, plan
+    return None, None, None
 
 def normalize_lotplan(lp: str) -> str:
-    """Return canonical LOT+PLAN string (e.g. '13SP181800')."""
-    lot, plan = _parse_lotplan(lp)
+    """Return canonical LOT[/SECTION]/PLAN string (e.g. '13/SP181800')."""
+    lot, section, plan = _parse_lotplan(lp)
     if lot and plan:
-        return f"{lot}{plan}"
+        parts = [lot]
+        if section:
+            parts.append(section)
+        parts.append(plan)
+        return "/".join(parts)
     return (lp or "").strip().upper()
 
 def fetch_parcel_geojson(lotplan: str) -> Dict[str, Any]:
     lp = normalize_lotplan(lotplan)
-    if not lp:
+    lot, section, plan = _parse_lotplan(lp)
+    if not (lot and plan):
         return {"type":"FeatureCollection","features":[]}
     if not PARCEL_SERVICE_URL or PARCEL_LAYER_ID < 0:
         raise RuntimeError("Parcel service not configured.")
     common = {"outFields":"*","outSR":4326}
+    empty_fc = {"type":"FeatureCollection","features":[]}
+
+    def _query(where: str) -> Dict[str, Any]:
+        try:
+            return _arcgis_geojson_query(
+                PARCEL_SERVICE_URL,
+                PARCEL_LAYER_ID,
+                dict(common, where=where),
+                paginate=False,
+            )
+        except (RuntimeError, requests.RequestException):
+            return empty_fc
 
     # Combined LOTPLAN field first
-    if PARCEL_LOTPLAN_FIELD:
-        where = f"UPPER({PARCEL_LOTPLAN_FIELD})='{lp}'"
-        fc = _arcgis_geojson_query(PARCEL_SERVICE_URL, PARCEL_LAYER_ID, dict(common, where=where), paginate=False)
-        if fc.get("features"): return fc
+    if PARCEL_LOTPLAN_FIELD and not section:
+        combined = f"{lot}{plan}"
+        where = f"UPPER({PARCEL_LOTPLAN_FIELD})='{combined}'"
+        fc = _query(where)
+        if fc.get("features"):
+            return fc
 
     # Split LOT + PLAN fallback
     if PARCEL_LOT_FIELD and PARCEL_PLAN_FIELD:
-        lot, plan = _parse_lotplan(lp)
-        if lot and plan:
-            where = f"UPPER({PARCEL_LOT_FIELD})='{lot}' AND UPPER({PARCEL_PLAN_FIELD})='{plan}'"
-            fc = _arcgis_geojson_query(PARCEL_SERVICE_URL, PARCEL_LAYER_ID, dict(common, where=where), paginate=False)
-            if fc.get("features"): return fc
+        clauses = [f"UPPER({PARCEL_LOT_FIELD})='{lot}'", f"UPPER({PARCEL_PLAN_FIELD})='{plan}'"]
+        if section and PARCEL_SECTION_FIELD:
+            clauses.insert(1, f"UPPER({PARCEL_SECTION_FIELD})='{section}'")
+        where = " AND ".join(clauses)
+        fc = _query(where)
+        if fc.get("features"):
+            return fc
 
-    return {"type":"FeatureCollection","features":[]}
+    return empty_fc
 
 def _standardise_code_name(fc: Dict[str, Any], code_field: str, name_field: str) -> Dict[str, Any]:
     feats = fc.get("features", [])

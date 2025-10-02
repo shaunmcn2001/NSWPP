@@ -3,12 +3,13 @@
 
 # ── Parcels (DCDB)
 # Source: PlanningCadastre / LandParcelPropertyFramework → layer 4 "Cadastral parcels"
-# Fields include: lotplan, lot, plan
+# Fields include: lotplan, lot, plan, section
 PARCEL_SERVICE_URL = "https://spatial-gis.information.qld.gov.au/arcgis/rest/services/PlanningCadastre/LandParcelPropertyFramework/MapServer"
 PARCEL_LAYER_ID = 4
 PARCEL_LOTPLAN_FIELD = "lotplan"   # combined, e.g. 13SP181800
 PARCEL_LOT_FIELD = "lot"           # split fallback
 PARCEL_PLAN_FIELD = "plan"
+PARCEL_SECTION_FIELD = "section"
 
 # ── Easements (DCDB easement parcels)
 # Source: PlanningCadastre / LandParcelPropertyFramework → layer 9 "Easements"
